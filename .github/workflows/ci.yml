@@ -1,0 +1,35 @@
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint  # If you have linting
+
+      - name: Type Check
+        run: npm run type-check  # If using TypeScript
+
+      - name: Architecture Check
+        run: node tools/architecture-check.mjs
+
+      - name: Unit Tests
+        run: npx vitest run --coverage  # Add coverage reporting
+
+      - name: Upload Coverage
+        uses: codecov/codecov-action@v3  # If using Codecov
+        if: always()
+
+      - name: Build
+        run: npm run build
