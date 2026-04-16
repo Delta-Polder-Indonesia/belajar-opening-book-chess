@@ -30,8 +30,32 @@ type MoveHighlight = {
 type MainMode = 'analysis' | 'games' | 'explore';
 type LeftNavAction = 'home' | 'play' | 'learn' | 'book' | 'search';
 
+type EngineSource = {
+  label: string;
+  scriptUrl: string;
+  baseUrl: string;
+};
+
 const START_CHESS = new Chess();
 const START_FEN = START_CHESS.fen();
+
+const ENGINE_SOURCES: EngineSource[] = [
+  {
+    label: 'local',
+    scriptUrl: '/engine/stockfish-18-lite-single.js',
+    baseUrl: '/engine/',
+  },
+  {
+    label: 'unpkg',
+    scriptUrl: 'https://unpkg.com/stockfish@18.0.7/bin/stockfish-18-lite-single.js',
+    baseUrl: 'https://unpkg.com/stockfish@18.0.7/bin/',
+  },
+  {
+    label: 'jsdelivr',
+    scriptUrl: 'https://cdn.jsdelivr.net/npm/stockfish@18.0.7/bin/stockfish-18-lite-single.js',
+    baseUrl: 'https://cdn.jsdelivr.net/npm/stockfish@18.0.7/bin/',
+  },
+];
 
 function splitMoves(moves: string): string[] {
   return moves
@@ -280,17 +304,18 @@ const ChessGame: React.FC = () => {
   }, [loadOpeningTimeline]);
 
   useEffect(() => {
-    const workerBootScript = `
-self.Te = 'https://cdn.jsdelivr.net/npm/stockfish@18.0.7/bin/';
-importScripts('https://cdn.jsdelivr.net/npm/stockfish@18.0.7/bin/stockfish-18-lite-single.js');
-`;
+    let canceled = false;
+    let readySeen = false;
+    let initTimeoutId: number | null = null;
 
-    try {
-      const blob = new Blob([workerBootScript], { type: 'text/javascript' });
-      const workerUrl = URL.createObjectURL(blob);
-      const worker = new Worker(workerUrl);
-      URL.revokeObjectURL(workerUrl);
+    const terminateCurrentWorker = () => {
+      if (workerRef.current) {
+        workerRef.current.terminate();
+        workerRef.current = null;
+      }
+    };
 
+    const wireWorkerEvents = (worker: Worker) => {
       worker.onmessage = (event) => {
         const line = String(event.data ?? '').trim();
         if (!line) {
@@ -298,6 +323,11 @@ importScripts('https://cdn.jsdelivr.net/npm/stockfish@18.0.7/bin/stockfish-18-li
         }
 
         if (line === 'readyok') {
+          readySeen = true;
+          if (initTimeoutId) {
+            window.clearTimeout(initTimeoutId);
+            initTimeoutId = null;
+          }
           setEngineReady(true);
           setEngineError(null);
           return;
@@ -329,26 +359,78 @@ importScripts('https://cdn.jsdelivr.net/npm/stockfish@18.0.7/bin/stockfish-18-li
           setEngineBusy(false);
         }
       };
+    };
 
-      worker.onerror = () => {
-        setEngineError('Stockfish gagal dimuat di browser ini.');
+    const createWorkerFromSource = (source: EngineSource) => {
+      const workerBootScript = `
+self.Te = ${JSON.stringify(source.baseUrl)};
+importScripts(${JSON.stringify(source.scriptUrl)});
+`;
+
+      const blob = new Blob([workerBootScript], { type: 'text/javascript' });
+      const workerUrl = URL.createObjectURL(blob);
+      const worker = new Worker(workerUrl);
+      URL.revokeObjectURL(workerUrl);
+      return worker;
+    };
+
+    const tryBootEngine = (sourceIndex: number) => {
+      if (canceled) {
+        return;
+      }
+
+      if (initTimeoutId) {
+        window.clearTimeout(initTimeoutId);
+        initTimeoutId = null;
+      }
+
+      if (sourceIndex >= ENGINE_SOURCES.length) {
         setEngineReady(false);
         setEngineBusy(false);
-      };
+        setEngineError('Stockfish gagal dimuat. Cek koneksi atau sediakan file lokal di public/engine.');
+        return;
+      }
 
-      worker.postMessage('uci');
-      worker.postMessage('isready');
-      worker.postMessage('setoption name MultiPV value 1');
-      workerRef.current = worker;
-    } catch {
-      setEngineError('Stockfish tidak bisa diinisialisasi.');
-    }
+      const source = ENGINE_SOURCES[sourceIndex];
+      setEngineReady(false);
+      setEngineBusy(false);
+      setEngineError(`Mencoba memuat engine dari ${source.label}...`);
+
+      try {
+        terminateCurrentWorker();
+        const worker = createWorkerFromSource(source);
+        workerRef.current = worker;
+        wireWorkerEvents(worker);
+
+        worker.onerror = () => {
+          if (canceled) {
+            return;
+          }
+          tryBootEngine(sourceIndex + 1);
+        };
+
+        worker.postMessage('uci');
+        worker.postMessage('isready');
+        worker.postMessage('setoption name MultiPV value 1');
+
+        initTimeoutId = window.setTimeout(() => {
+          if (!canceled && !readySeen) {
+            tryBootEngine(sourceIndex + 1);
+          }
+        }, 6000);
+      } catch {
+        tryBootEngine(sourceIndex + 1);
+      }
+    };
+
+    tryBootEngine(0);
 
     return () => {
-      if (workerRef.current) {
-        workerRef.current.terminate();
-        workerRef.current = null;
+      canceled = true;
+      if (initTimeoutId) {
+        window.clearTimeout(initTimeoutId);
       }
+      terminateCurrentWorker();
     };
   }, []);
 
