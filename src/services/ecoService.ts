@@ -1,13 +1,18 @@
 import { Opening } from '../types/chess';
 
 const LOCAL_OPENING_FILES = [
-  '/opening-book/ecoA.json',
-  '/opening-book/ecoB.json',
-  '/opening-book/ecoC.json',
-  '/opening-book/ecoD.json',
-  '/opening-book/ecoE.json',
-  '/opening-book/eco_interpolated.json',
+  'opening-book/ecoA.json',
+  'opening-book/ecoB.json',
+  'opening-book/ecoC.json',
+  'opening-book/ecoD.json',
+  'opening-book/ecoE.json',
+  'opening-book/eco_interpolated.json',
 ];
+
+function toPublicUrl(relativePath: string): string {
+  // Works both in localhost (/) and GitHub Pages (/repo-name/).
+  return new URL(relativePath, import.meta.env.BASE_URL).toString();
+}
 
 type RawOpening = {
   eco?: string;
@@ -61,10 +66,11 @@ export async function fetchAllOpenings(): Promise<Opening[]> {
     // Opening book dibaca dari folder lokal public/opening-book.
     const responses = await Promise.allSettled(
       LOCAL_OPENING_FILES.map(async (filePath) => {
-        const response = await fetch(filePath);
+        const fileUrl = toPublicUrl(filePath);
+        const response = await fetch(fileUrl);
 
         if (!response.ok) {
-          throw new Error(`${filePath} tidak ditemukan (${response.status})`);
+          throw new Error(`${fileUrl} tidak ditemukan (${response.status})`);
         }
 
         return response.json();
