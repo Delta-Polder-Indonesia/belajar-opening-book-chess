@@ -64,7 +64,7 @@ const AnalysisPanel: React.FC<AnalysisPanelProps> = ({
         </div>
         <div className="mb-2 flex items-center gap-2 text-sm font-semibold text-slate-100">
           <Cpu size={14} />
-          Stockfish WASM Lite
+          Local Engine
         </div>
         <p className="text-xs text-slate-400">
           {engineError

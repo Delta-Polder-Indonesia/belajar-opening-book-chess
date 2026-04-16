@@ -30,32 +30,14 @@ type MoveHighlight = {
 type MainMode = 'analysis' | 'games' | 'explore';
 type LeftNavAction = 'home' | 'play' | 'learn' | 'book' | 'search';
 
-type EngineSource = {
-  label: string;
-  scriptUrl: string;
-  baseUrl: string;
-};
-
 const START_CHESS = new Chess();
 const START_FEN = START_CHESS.fen();
 
-const ENGINE_SOURCES: EngineSource[] = [
-  {
-    label: 'local',
-    scriptUrl: '/engine/stockfish-18-lite-single.js',
-    baseUrl: '/engine/',
-  },
-  {
-    label: 'unpkg',
-    scriptUrl: 'https://unpkg.com/stockfish@18.0.7/bin/stockfish-18-lite-single.js',
-    baseUrl: 'https://unpkg.com/stockfish@18.0.7/bin/',
-  },
-  {
-    label: 'jsdelivr',
-    scriptUrl: 'https://cdn.jsdelivr.net/npm/stockfish@18.0.7/bin/stockfish-18-lite-single.js',
-    baseUrl: 'https://cdn.jsdelivr.net/npm/stockfish@18.0.7/bin/',
-  },
-];
+function toPublicUrl(path: string): string {
+  const base = import.meta.env.BASE_URL || '/';
+  const normalizedBase = base.endsWith('/') ? base : `${base}/`;
+  return `${normalizedBase}${path.replace(/^\//, '')}`;
+}
 
 function splitMoves(moves: string): string[] {
   return moves
@@ -306,7 +288,6 @@ const ChessGame: React.FC = () => {
   useEffect(() => {
     let canceled = false;
     let readySeen = false;
-    let initTimeoutId: number | null = null;
 
     const terminateCurrentWorker = () => {
       if (workerRef.current) {
@@ -315,7 +296,35 @@ const ChessGame: React.FC = () => {
       }
     };
 
-    const wireWorkerEvents = (worker: Worker) => {
+    const workerScriptUrl = toPublicUrl('engine/stockfish-17-lite-single.js');
+    const workerBaseUrl = toPublicUrl('engine/');
+
+    setEngineReady(false);
+    setEngineBusy(false);
+    setEngineError('Memuat engine lokal...');
+
+    try {
+      terminateCurrentWorker();
+
+      const workerBootScript = `
+self.Te = ${JSON.stringify(workerBaseUrl)};
+importScripts(${JSON.stringify(workerScriptUrl)});
+`;
+
+      const blob = new Blob([workerBootScript], { type: 'text/javascript' });
+      const workerUrl = URL.createObjectURL(blob);
+      const worker = new Worker(workerUrl);
+      URL.revokeObjectURL(workerUrl);
+      workerRef.current = worker;
+
+      const initTimeoutId = window.setTimeout(() => {
+        if (!readySeen && !canceled) {
+          setEngineReady(false);
+          setEngineBusy(false);
+          setEngineError('Engine lokal belum aktif. Isi file public/engine/stockfish-17-lite-single.js.');
+        }
+      }, 6000);
+
       worker.onmessage = (event) => {
         const line = String(event.data ?? '').trim();
         if (!line) {
@@ -324,10 +333,7 @@ const ChessGame: React.FC = () => {
 
         if (line === 'readyok') {
           readySeen = true;
-          if (initTimeoutId) {
-            window.clearTimeout(initTimeoutId);
-            initTimeoutId = null;
-          }
+          window.clearTimeout(initTimeoutId);
           setEngineReady(true);
           setEngineError(null);
           return;
@@ -359,79 +365,31 @@ const ChessGame: React.FC = () => {
           setEngineBusy(false);
         }
       };
-    };
 
-    const createWorkerFromSource = (source: EngineSource) => {
-      const workerBootScript = `
-self.Te = ${JSON.stringify(source.baseUrl)};
-importScripts(${JSON.stringify(source.scriptUrl)});
-`;
-
-      const blob = new Blob([workerBootScript], { type: 'text/javascript' });
-      const workerUrl = URL.createObjectURL(blob);
-      const worker = new Worker(workerUrl);
-      URL.revokeObjectURL(workerUrl);
-      return worker;
-    };
-
-    const tryBootEngine = (sourceIndex: number) => {
-      if (canceled) {
-        return;
-      }
-
-      if (initTimeoutId) {
-        window.clearTimeout(initTimeoutId);
-        initTimeoutId = null;
-      }
-
-      if (sourceIndex >= ENGINE_SOURCES.length) {
+      worker.onerror = () => {
         setEngineReady(false);
         setEngineBusy(false);
-        setEngineError('Stockfish gagal dimuat. Cek koneksi atau sediakan file lokal di public/engine.');
-        return;
-      }
+        setEngineError('Engine lokal gagal dimuat. Periksa file public/engine/stockfish-17-lite-single.js.');
+      };
 
-      const source = ENGINE_SOURCES[sourceIndex];
+      worker.postMessage('uci');
+      worker.postMessage('isready');
+      worker.postMessage('setoption name MultiPV value 1');
+
+      return () => {
+        canceled = true;
+        window.clearTimeout(initTimeoutId);
+        terminateCurrentWorker();
+      };
+    } catch {
       setEngineReady(false);
       setEngineBusy(false);
-      setEngineError(`Mencoba memuat engine dari ${source.label}...`);
-
-      try {
+      setEngineError('Engine lokal gagal dimuat. Periksa file public/engine/stockfish-17-lite-single.js.');
+      return () => {
+        canceled = true;
         terminateCurrentWorker();
-        const worker = createWorkerFromSource(source);
-        workerRef.current = worker;
-        wireWorkerEvents(worker);
-
-        worker.onerror = () => {
-          if (canceled) {
-            return;
-          }
-          tryBootEngine(sourceIndex + 1);
-        };
-
-        worker.postMessage('uci');
-        worker.postMessage('isready');
-        worker.postMessage('setoption name MultiPV value 1');
-
-        initTimeoutId = window.setTimeout(() => {
-          if (!canceled && !readySeen) {
-            tryBootEngine(sourceIndex + 1);
-          }
-        }, 6000);
-      } catch {
-        tryBootEngine(sourceIndex + 1);
-      }
-    };
-
-    tryBootEngine(0);
-
-    return () => {
-      canceled = true;
-      if (initTimeoutId) {
-        window.clearTimeout(initTimeoutId);
-      }
-      terminateCurrentWorker();
-    };
+      };
+    }
   }, []);
 
   useEffect(() => {
